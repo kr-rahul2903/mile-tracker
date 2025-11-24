@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '../types';
-import { addEntry, getEntries } from '../services/storage';
 import { generateDrivingComment } from '../services/gemini';
 import { fetchSheetData } from '../services/googleSheets';
+import { saveEntryToSupabase, getLastEntryFromSupabase } from '../services/supabase';
 import { Sparkles, Save, Loader2, AlertCircle, User as UserIcon, Gauge, FileSpreadsheet } from 'lucide-react';
 
 interface TabFormProps {
@@ -44,28 +44,35 @@ const TabForm: React.FC<TabFormProps> = ({ user, onEntryAdded }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [supabaseSaveStatus, setSupabaseSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   
-  // Local storage state
-  const [lastRecordedMileage, setLastRecordedMileage] = useState<number | null>(null);
-  const [lastDriver, setLastDriver] = useState<string | null>(null);
+  // Supabase state
+  const [lastSupabaseEntry, setLastSupabaseEntry] = useState<{driver: string, mileage: number} | null>(null);
+  const [isLoadingSupabase, setIsLoadingSupabase] = useState(true);
 
   // Sheet data state
   const [sheetLastEntry, setSheetLastEntry] = useState<{driver: string, mileage: string} | null>(null);
   const [isLoadingSheet, setIsLoadingSheet] = useState(true);
 
-  // Load Local Data
+  // Load Supabase Data
   useEffect(() => {
-    const entries = getEntries();
-    if (entries.length > 0) {
-      const sortedEntries = [...entries].sort((a, b) => {
-        const dateA = a.tripStartDate || (a as any).timestamp || 0;
-        const dateB = b.tripStartDate || (b as any).timestamp || 0;
-        return dateB - dateA;
-      });
-      const latestEntry = sortedEntries[0];
-      setLastRecordedMileage(latestEntry.mileage);
-      setLastDriver(latestEntry.userName);
-    }
+    const loadSupabaseData = async () => {
+      setIsLoadingSupabase(true);
+      try {
+        const lastEntry = await getLastEntryFromSupabase();
+        if (lastEntry) {
+          setLastSupabaseEntry({
+            driver: lastEntry.userName,
+            mileage: lastEntry.mileage,
+          });
+        }
+      } catch (e) {
+        console.error("Supabase load error", e);
+      } finally {
+        setIsLoadingSupabase(false);
+      }
+    };
+    loadSupabaseData();
   }, []);
 
   // Load Sheet Data
@@ -122,21 +129,21 @@ const TabForm: React.FC<TabFormProps> = ({ user, onEntryAdded }) => {
       return;
     }
 
-    // Validation 1: Check alternation based on Local Storage
-    if (lastDriver && user.name === lastDriver) {
-      setError(`Alternate driver required (Local Check). The last trip was logged by you (${lastDriver}).`);
+    // Validation 1: Check alternation based on Supabase (Primary Source)
+    if (lastSupabaseEntry && user.name.toLowerCase() === lastSupabaseEntry.driver.toLowerCase()) {
+      setError(`Alternate driver required. The last trip was logged by you (${lastSupabaseEntry.driver}).`);
       return;
     }
 
-    // Validation 2: Check alternation based on Google Sheet Data (Source of Truth)
+    // Validation 2: Check alternation based on Google Sheet Data (Secondary Check)
     if (sheetLastEntry && user.name.toLowerCase() === sheetLastEntry.driver.toLowerCase()) {
-      setError(`Alternate driver required (Sheet Check). The last entry in the Google Sheet was also by ${sheetLastEntry.driver}. Please wait for the other driver.`);
+      setError(`Alternate driver required. The last entry in the Google Sheet was also by ${sheetLastEntry.driver}. Please wait for the other driver.`);
       return;
     }
 
-    // Validation 3: Check if mileage is less than the last recorded entry (Local)
-    if (lastRecordedMileage !== null && miles < lastRecordedMileage) {
-      setError(`Mileage cannot be lower than the previous record (${lastRecordedMileage.toLocaleString()} miles).`);
+    // Validation 3: Check if mileage is less than the last Supabase entry
+    if (lastSupabaseEntry && miles < lastSupabaseEntry.mileage) {
+      setError(`Mileage cannot be lower than the previous record (${lastSupabaseEntry.mileage.toLocaleString()} miles).`);
       return;
     }
     
@@ -160,12 +167,34 @@ const TabForm: React.FC<TabFormProps> = ({ user, onEntryAdded }) => {
 
     await Promise.all([minDelayPromise, googleFormPromise]);
 
-    addEntry({
-      userName: user.name,
-      mileage: miles,
-      message: message.trim() || 'No notes provided',
-      tripStartDate: now,
-    });
+    // Save directly to Supabase with the exact mileage value from input
+    setSupabaseSaveStatus('saving');
+    try {
+      const savedEntry = await saveEntryToSupabase({
+        userName: user.name,
+        mileage: miles, // Use the exact parsed value
+        message: message.trim() || 'No notes provided',
+        tripStartDate: now,
+      });
+      
+      setSupabaseSaveStatus('success');
+      console.log('Entry saved to Supabase successfully:', savedEntry);
+      
+      // Update local state with the new entry
+      setLastSupabaseEntry({
+        driver: savedEntry.userName,
+        mileage: savedEntry.mileage,
+      });
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSupabaseSaveStatus('idle'), 3000);
+    } catch (error) {
+      setSupabaseSaveStatus('error');
+      console.error('Failed to save to Supabase:', error);
+      setError('Failed to save entry. Please try again.');
+      setIsSaving(false);
+      return; // Don't clear form if save failed
+    }
     
     setMileage('');
     setMessage('');
@@ -186,6 +215,26 @@ const TabForm: React.FC<TabFormProps> = ({ user, onEntryAdded }) => {
         <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-700 animate-fadeIn">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
           <div className="text-sm font-medium">{error}</div>
+        </div>
+      )}
+
+      {/* Supabase Save Status */}
+      {supabaseSaveStatus === 'saving' && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center gap-3 text-blue-700 animate-fadeIn">
+          <Loader2 className="w-5 h-5 animate-spin flex-shrink-0" />
+          <div className="text-sm font-medium">Saving to database...</div>
+        </div>
+      )}
+      {supabaseSaveStatus === 'success' && (
+        <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center gap-3 text-green-700 animate-fadeIn">
+          <Save className="w-5 h-5 flex-shrink-0" />
+          <div className="text-sm font-medium">Entry saved to database successfully!</div>
+        </div>
+      )}
+      {supabaseSaveStatus === 'error' && (
+        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-3 text-yellow-700 animate-fadeIn">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          <div className="text-sm font-medium">Entry saved locally, but database save failed. Check console for details.</div>
         </div>
       )}
 
@@ -241,10 +290,10 @@ const TabForm: React.FC<TabFormProps> = ({ user, onEntryAdded }) => {
             <label htmlFor="mileage" className="block text-sm font-medium text-gray-700">
               Odometer Reading
             </label>
-            {lastRecordedMileage !== null && (
+            {!isLoadingSupabase && lastSupabaseEntry && (
               <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded-md flex items-center gap-1">
                 <Gauge className="w-3 h-3" />
-                Local Last: {lastRecordedMileage.toLocaleString()} mi
+                Last: {lastSupabaseEntry.mileage.toLocaleString()} mi
               </span>
             )}
           </div>

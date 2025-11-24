@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CarEntry } from '../types';
-import { getEntries } from '../services/storage';
-import { Car, Clock, User as UserIcon, ArrowRight, TrendingUp, Calendar, Filter } from 'lucide-react';
+import { getEntriesFromSupabase } from '../services/supabase';
+import { Car, Clock, User as UserIcon, ArrowRight, TrendingUp, Calendar, Filter, Database, AlertCircle, RefreshCw } from 'lucide-react';
 
 // Helper to format date as YYYY-MM-DD for input fields (Local time)
 const toInputDate = (date: Date) => {
@@ -14,6 +14,7 @@ const toInputDate = (date: Date) => {
 const TabList: React.FC = () => {
   const [entries, setEntries] = useState<CarEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
   
   // Initialize date range based on current date logic
   const [dateRange, setDateRange] = useState(() => {
@@ -40,19 +41,32 @@ const TabList: React.FC = () => {
     };
   });
 
-  useEffect(() => {
-    // Simulate fetch delay
-    setTimeout(() => {
-      const data = getEntries();
+  const loadEntries = async () => {
+    setLoading(true);
+    setSupabaseError(null);
+    
+    try {
+      const supabaseEntries = await getEntriesFromSupabase();
+      
       // Sort by tripStartDate descending
-      data.sort((a, b) => {
-         const dateA = a.tripStartDate || (a as any).timestamp || 0;
-         const dateB = b.tripStartDate || (b as any).timestamp || 0;
-         return dateB - dateA;
+      supabaseEntries.sort((a, b) => {
+        const dateA = a.tripStartDate || (a as any).timestamp || 0;
+        const dateB = b.tripStartDate || (b as any).timestamp || 0;
+        return dateB - dateA;
       });
-      setEntries(data);
+      
+      setEntries(supabaseEntries);
+    } catch (error) {
+      console.error('Error loading entries from Supabase:', error);
+      setSupabaseError('Could not load data from Supabase. Please check your connection and try again.');
+      setEntries([]);
+    } finally {
       setLoading(false);
-    }, 400);
+    }
+  };
+
+  useEffect(() => {
+    loadEntries();
   }, []);
 
   const formatTime = (timestamp: number) => {
@@ -104,11 +118,39 @@ const TabList: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Date Filter */}
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-gray-700 font-medium">
-          <Filter className="w-5 h-5 text-blue-600" />
-          <span>Filter History</span>
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-gray-700 font-medium">
+            <Filter className="w-5 h-5 text-blue-600" />
+            <span>Filter History</span>
+          </div>
+          
+          {/* Refresh Button */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Database className="w-4 h-4 text-gray-400" />
+              <span>Supabase</span>
+            </div>
+            <button
+              onClick={loadEntries}
+              disabled={loading}
+              className="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Refresh data"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
+        
+        {/* Supabase Error Message */}
+        {supabaseError && (
+          <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 text-sm">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>{supabaseError}</span>
+          </div>
+        )}
+        
+        {/* Date Range Filter */}
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <div className="relative flex-1 sm:flex-none">
             <input

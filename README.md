@@ -15,6 +15,18 @@ View your app in AI Studio: https://ai.studio/apps/drive/1RoNdv1lpFpzWu_AEFdx8Nv
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Set up environment variables:
+   - Create a `.env` file in the root directory
+   - Add your `GEMINI_API_KEY` for AI features
+   - Add your Supabase credentials:
+     ```
+     GEMINI_API_KEY=your_gemini_api_key_here
+     VITE_SUPABASE_URL=your_supabase_project_url
+     VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+     ```
+3. Set up Supabase:
+   - Create a new project at [Supabase](https://app.supabase.com)
+   - Go to SQL Editor and run the SQL from `supabase-setup.sql` to create the `car_entries` table
+   - Get your project URL and anon key from Settings > API
+4. Run the app:
    `npm run dev`
