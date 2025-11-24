@@ -1,0 +1,5 @@
+{
+  "name": "MileTracker AI",
+  "description": "A smart mileage tracking application allowing users to log trips with AI-generated notes and view a history of all entries.",
+  "requestFramePermissions": []
+}
